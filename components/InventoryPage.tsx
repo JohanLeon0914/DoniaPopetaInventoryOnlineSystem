@@ -53,8 +53,17 @@ export default function InventoryPage() {
 
   const handleDelete = async (id: number) => {
     if (!confirm('¿Eliminar esta materia prima?')) return
-    await supabase.from('raw_materials').delete().eq('id', id)
-    fetchItems()
+    
+    try {
+      await supabase.from('raw_materials').delete().eq('id', id)
+      fetchItems()
+    } catch (error: any) {
+      if (error.code === '23503') { // Foreign key violation
+        alert('No se puede eliminar esta materia prima porque está siendo utilizada en productos. Elimina primero los productos que la usan.')
+      } else {
+        alert('Error al eliminar la materia prima. Inténtalo de nuevo.')
+      }
+    }
   }
 
   return (

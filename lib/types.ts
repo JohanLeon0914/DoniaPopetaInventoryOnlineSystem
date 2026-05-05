@@ -39,3 +39,21 @@ export interface OrderItem {
   unit_price: number
   product?: Product
 }
+
+export interface ProductionRecord {
+  id: number
+  production_date: string
+  notes?: string
+  created_at: string
+  updated_at: string
+  items?: ProductionItem[]
+}
+
+export interface ProductionItem {
+  id: number
+  production_record_id: number
+  product_id: number
+  quantity: number
+  created_at: string
+  product?: Product
+}

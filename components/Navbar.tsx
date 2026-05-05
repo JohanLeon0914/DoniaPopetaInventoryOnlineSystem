@@ -1,7 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { LogIn, LogOut, Package, ShoppingBag, ClipboardList, Menu, X } from 'lucide-react'
+import { LogIn, LogOut, Package, ShoppingBag, ClipboardList, Menu, X, Wrench } from 'lucide-react'
 import type { Tab } from '@/app/page'
 
 interface NavbarProps {
@@ -69,6 +69,7 @@ export default function Navbar({ tab, setTab, onLoginClick }: NavbarProps) {
           {navItem('inventory', 'Inventario', Package)}
           {navItem('products', 'Productos', ShoppingBag)}
           {navItem('orders', 'Pedidos', ClipboardList)}
+          {navItem('production', 'Producción', Wrench)}
         </nav>
 
         {/* Desktop Auth */}
@@ -104,6 +105,7 @@ export default function Navbar({ tab, setTab, onLoginClick }: NavbarProps) {
           {navItem('inventory', 'Inventario', Package)}
           {navItem('products', 'Productos', ShoppingBag)}
           {navItem('orders', 'Pedidos', ClipboardList)}
+          {navItem('production', 'Producción', Wrench)}
           <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
             {isAuthenticated ? (
               <button 

@@ -80,9 +80,20 @@ export default function ProductsPage() {
 
   const handleDelete = async (id: number) => {
     if (!confirm('¿Eliminar este producto?')) return
-    await supabase.from('product_ingredients').delete().eq('product_id', id)
-    await supabase.from('products').delete().eq('id', id)
-    fetchAll()
+    
+    try {
+      // Primero eliminar ingredientes del producto
+      await supabase.from('product_ingredients').delete().eq('product_id', id)
+      // Luego eliminar el producto
+      await supabase.from('products').delete().eq('id', id)
+      fetchAll()
+    } catch (error: any) {
+      if (error.code === '23503') { // Foreign key violation
+        alert('No se puede eliminar este producto porque está siendo utilizado en pedidos o registros de producción. Elimina primero esos registros.')
+      } else {
+        alert('Error al eliminar el producto. Inténtalo de nuevo.')
+      }
+    }
   }
 
   const addIngredient = () => {

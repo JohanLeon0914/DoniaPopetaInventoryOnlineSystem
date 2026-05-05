@@ -6,8 +6,9 @@ import Navbar from '@/components/Navbar'
 import InventoryPage from '@/components/InventoryPage'
 import ProductsPage from '@/components/ProductsPage'
 import OrdersPage from '@/components/OrdersPage'
+import ProductionPage from '@/components/ProductionPage'
 
-export type Tab = 'inventory' | 'products' | 'orders'
+export type Tab = 'inventory' | 'products' | 'orders' | 'production'
 
 export default function Home() {
   const { isAuthenticated } = useAuth()
@@ -21,6 +22,7 @@ export default function Home() {
         {tab === 'inventory' && <InventoryPage />}
         {tab === 'products' && <ProductsPage />}
         {tab === 'orders' && <OrdersPage />}
+        {tab === 'production' && <ProductionPage />}
       </main>
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
     </div>
