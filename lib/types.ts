@@ -47,6 +47,7 @@ export interface ProductionRecord {
   created_at: string
   updated_at: string
   items?: ProductionItem[]
+  inventory_history?: InventoryHistory[]
 }
 
 export interface ProductionItem {
@@ -56,4 +57,15 @@ export interface ProductionItem {
   quantity: number
   created_at: string
   product?: Product
+}
+
+export interface InventoryHistory {
+  id: number
+  production_record_id: number
+  raw_material_id: number
+  quantity_before: number
+  quantity_after: number
+  quantity_used: number
+  created_at: string
+  raw_material?: RawMaterial
 }

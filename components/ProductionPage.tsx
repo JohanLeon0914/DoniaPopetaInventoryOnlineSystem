@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import { Plus, Pencil, Trash2, Package, Eye, X } from 'lucide-react'
-import type { ProductionRecord, ProductionItem, Product, RawMaterial } from '@/lib/types'
+import type { ProductionRecord, ProductionItem, Product, RawMaterial, InventoryHistory } from '@/lib/types'
 
 export default function ProductionPage() {
   const { isAuthenticated } = useAuth()
@@ -28,7 +28,7 @@ export default function ProductionPage() {
   const fetchAll = async () => {
     const [{ data: recs }, { data: prods }, { data: mats }] = await Promise.all([
       supabase.from('production_records')
-        .select('*, items:production_items(*, product:products(*))')
+        .select('*, items:production_items(*, product:products(*)), inventory_history:inventory_history(*, raw_material:raw_materials(*))')
         .order('production_date', { ascending: false }),
       supabase.from('products').select('*, ingredients:product_ingredients(*, raw_material:raw_materials(*))').order('name'),
       supabase.from('raw_materials').select('*').order('name'),
@@ -86,7 +86,14 @@ export default function ProductionPage() {
     return shortages
   }
 
-  const deductRawMaterials = async (productItems: { product_id: number; quantity: number }[]) => {
+  const deductRawMaterials = async (productItems: { product_id: number; quantity: number }[], recordId: number) => {
+    const inventoryHistoryData: {
+      raw_material_id: number;
+      quantity_before: number;
+      quantity_after: number;
+      quantity_used: number;
+    }[] = []
+
     for (const item of productItems) {
       const product = products.find(p => p.id === item.product_id)
       if (!product?.ingredients) continue
@@ -102,15 +109,34 @@ export default function ProductionPage() {
           .single()
         
         if (currentMaterial) {
-          const newQuantity = currentMaterial.quantity - requiredQuantity
+          const quantityBefore = currentMaterial.quantity
+          const quantityAfter = currentMaterial.quantity - requiredQuantity
+          
+          // Guardar datos para historial
+          inventoryHistoryData.push({
+            raw_material_id: ingredient.raw_material_id,
+            quantity_before: quantityBefore,
+            quantity_after: quantityAfter,
+            quantity_used: requiredQuantity,
+          })
           
           // Actualizar con el nuevo valor
           await supabase
             .from('raw_materials')
-            .update({ quantity: newQuantity })
+            .update({ quantity: quantityAfter })
             .eq('id', ingredient.raw_material_id)
         }
       }
+    }
+
+    // Insertar historial de inventario
+    if (inventoryHistoryData.length > 0) {
+      await supabase.from('inventory_history').insert(
+        inventoryHistoryData.map(item => ({
+          production_record_id: recordId,
+          ...item,
+        }))
+      )
     }
   }
 
@@ -166,7 +192,7 @@ export default function ProductionPage() {
         )
 
         // Descontar materias primas
-        await deductRawMaterials(validItems)
+        await deductRawMaterials(validItems, recordId)
       }
 
       setSaving(false)
@@ -451,6 +477,48 @@ export default function ProductionPage() {
                 </div>
               ))}
             </div>
+
+            {/* Inventory History Section */}
+            {viewRecord.inventory_history && viewRecord.inventory_history.length > 0 && (
+              <div style={{ borderTop: '1.5px solid var(--border)', paddingTop: 16, marginBottom: 20 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 12px' }}>Cambios en Inventario:</h3>
+                <div className="space-y-2">
+                  {viewRecord.inventory_history.map((history: InventoryHistory) => (
+                    <div key={history.id} style={{
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      padding: '12px',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, fontSize: 14 }}>
+                          {history.raw_material?.name}
+                        </span>
+                        <span style={{
+                          background: 'var(--accent-light)',
+                          color: 'var(--accent)',
+                          fontSize: 12,
+                          padding: '2px 8px',
+                          borderRadius: 12,
+                          fontWeight: 600,
+                        }}>
+                          -{history.quantity_used} {history.raw_material?.unit}
+                        </span>
+                      </div>
+                      <div style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        fontSize: 13, 
+                        color: 'var(--text-muted)' 
+                      }}>
+                        <span>Antes: {history.quantity_before} {history.raw_material?.unit}</span>
+                        <span>Después: {history.quantity_after} {history.raw_material?.unit}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-3 justify-end">
               <button className="btn-primary" onClick={() => setViewRecord(null)}>
