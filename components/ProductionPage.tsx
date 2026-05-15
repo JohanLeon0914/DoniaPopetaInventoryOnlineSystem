@@ -25,6 +25,30 @@ export default function ProductionPage() {
     day: '2-digit', month: 'short', year: 'numeric' 
   })
 
+  const LABOR_COST_PER_UNIT = 200
+  const ELECTRICITY_COST = 5000
+  const SOCIAL_SECURITY_COST = 12500
+
+  const calculateRawMaterialCost = (productItems: { product_id: number; quantity: number }[]) => {
+    let total = 0
+
+    for (const item of productItems) {
+      const product = products.find(p => p.id === item.product_id)
+      if (!product?.ingredients) continue
+
+      for (const ingredient of product.ingredients) {
+        const rawMaterial = rawMaterials.find(rm => rm.id === ingredient.raw_material_id)
+        if (!rawMaterial) continue
+
+        const quantityUsed = ingredient.quantity * item.quantity
+        const unitCost = rawMaterial.cost_per_unit ?? 0
+        total += quantityUsed * unitCost
+      }
+    }
+
+    return total
+  }
+
   const fetchAll = async () => {
     const [{ data: recs }, { data: prods }, { data: mats }] = await Promise.all([
       supabase.from('production_records')
@@ -138,6 +162,8 @@ export default function ProductionPage() {
         }))
       )
     }
+
+    return calculateRawMaterialCost(productItems)
   }
 
   const handleSave = async () => {
@@ -182,6 +208,12 @@ export default function ProductionPage() {
 
       // Insertar items de producción
       const validItems = items.filter(i => i.product_id && i.quantity > 0)
+      const totalUnits = validItems.reduce((sum, i) => sum + i.quantity, 0)
+      const laborCost = totalUnits * LABOR_COST_PER_UNIT
+      const electricityCost = ELECTRICITY_COST
+      const socialSecurityCost = SOCIAL_SECURITY_COST
+      let rawMaterialCost = 0
+
       if (validItems.length > 0) {
         await supabase.from('production_items').insert(
           validItems.map(i => ({
@@ -191,9 +223,17 @@ export default function ProductionPage() {
           }))
         )
 
-        // Descontar materias primas
-        await deductRawMaterials(validItems, recordId)
+        // Descontar materias primas y obtener costo de materias primas
+        rawMaterialCost = await deductRawMaterials(validItems, recordId)
       }
+
+      await supabase.from('production_records').update({
+        raw_material_cost: rawMaterialCost,
+        labor_cost: laborCost,
+        electricity_cost: electricityCost,
+        social_security_cost: socialSecurityCost,
+        total_cost: rawMaterialCost + laborCost + electricityCost + socialSecurityCost,
+      }).eq('id', recordId)
 
       setSaving(false)
       setShowForm(false)
@@ -220,6 +260,21 @@ export default function ProductionPage() {
   }
 
   const getProduct = (id: number) => products.find(p => p.id === id)
+
+  const getProductionCosts = (record: ProductionRecord) => {
+    const rawMaterialCost = record.raw_material_cost ?? (record.inventory_history?.reduce((sum, history) => {
+      const unitCost = history.raw_material?.cost_per_unit ?? 0
+      return sum + unitCost * history.quantity_used
+    }, 0) ?? 0)
+
+    const totalUnits = record.items?.reduce((sum, item) => sum + item.quantity, 0) ?? 0
+    const laborCost = record.labor_cost ?? (totalUnits * LABOR_COST_PER_UNIT)
+    const electricityCost = record.electricity_cost ?? ELECTRICITY_COST
+    const socialSecurityCost = record.social_security_cost ?? SOCIAL_SECURITY_COST
+    const totalCost = record.total_cost ?? (rawMaterialCost + laborCost + electricityCost + socialSecurityCost)
+
+    return { rawMaterialCost, laborCost, electricityCost, socialSecurityCost, totalCost }
+  }
 
   if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-muted)' }}>Cargando...</div>
 
@@ -314,6 +369,13 @@ export default function ProductionPage() {
                   style={{ fontSize: 13, padding: '7px 14px' }}
                 >
                   <Eye size={13} /> Ver detalle
+                </button>
+                <button 
+                  className="btn-secondary" 
+                  onClick={() => setViewRecord(record)} 
+                  style={{ fontSize: 13, padding: '7px 14px' }}
+                >
+                  <Eye size={13} /> Costos
                 </button>
                 {isAuthenticated && (
                   <>
@@ -477,6 +539,37 @@ export default function ProductionPage() {
                 </div>
               ))}
             </div>
+
+            {(() => {
+              const costs = getProductionCosts(viewRecord)
+              return (
+                <div style={{ borderTop: '1.5px solid var(--border)', paddingTop: 16, marginBottom: 20 }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 12px' }}>Costos de esta tanda</h3>
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Costo materia prima</span>
+                      <span style={{ fontWeight: 700 }}>${costs.rawMaterialCost.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Costo turno trabajadores</span>
+                      <span style={{ fontWeight: 700 }}>${costs.laborCost.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Luz</span>
+                      <span style={{ fontWeight: 700 }}>${costs.electricityCost.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Seguridad social</span>
+                      <span style={{ fontWeight: 700 }}>${costs.socialSecurityCost.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border)', paddingTop: 10, fontWeight: 700 }}>
+                      <span>Total</span>
+                      <span>${costs.totalCost.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* Inventory History Section */}
             {viewRecord.inventory_history && viewRecord.inventory_history.length > 0 && (

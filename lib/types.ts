@@ -3,6 +3,7 @@ export interface RawMaterial {
   name: string
   unit: string
   quantity: number
+  cost_per_unit?: number
   created_at: string
 }
 
@@ -44,6 +45,11 @@ export interface ProductionRecord {
   id: number
   production_date: string
   notes?: string
+  raw_material_cost?: number
+  labor_cost?: number
+  electricity_cost?: number
+  social_security_cost?: number
+  total_cost?: number
   created_at: string
   updated_at: string
   items?: ProductionItem[]

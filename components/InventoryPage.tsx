@@ -13,7 +13,7 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<RawMaterial | null>(null)
-  const [form, setForm] = useState({ name: '', unit: 'kg', quantity: '' })
+  const [form, setForm] = useState({ name: '', unit: 'kg', quantity: '', cost_per_unit: '' })
   const [saving, setSaving] = useState(false)
 
   const fetchItems = async () => {
@@ -27,10 +27,15 @@ export default function InventoryPage() {
   const openForm = (item?: RawMaterial) => {
     if (item) {
       setEditing(item)
-      setForm({ name: item.name, unit: item.unit, quantity: String(item.quantity) })
+      setForm({
+        name: item.name,
+        unit: item.unit,
+        quantity: String(item.quantity),
+        cost_per_unit: item.cost_per_unit != null ? String(item.cost_per_unit) : ''
+      })
     } else {
       setEditing(null)
-      setForm({ name: '', unit: 'kg', quantity: '' })
+      setForm({ name: '', unit: 'kg', quantity: '', cost_per_unit: '' })
     }
     setShowForm(true)
   }
@@ -38,7 +43,12 @@ export default function InventoryPage() {
   const handleSave = async () => {
     if (!form.name || !form.quantity) return
     setSaving(true)
-    const payload = { name: form.name, unit: form.unit, quantity: parseFloat(form.quantity) }
+    const payload = {
+      name: form.name,
+      unit: form.unit,
+      quantity: parseFloat(form.quantity),
+      cost_per_unit: form.cost_per_unit ? parseFloat(form.cost_per_unit) : null,
+    }
 
     if (editing) {
       await supabase.from('raw_materials').update(payload).eq('id', editing.id)
@@ -116,7 +126,10 @@ export default function InventoryPage() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{item.unit}</span>
+                  <div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>{item.unit}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Costo u.: {item.cost_per_unit != null ? `$${item.cost_per_unit.toFixed(2)}` : '—'}</div>
+                  </div>
                   {isAuthenticated && (
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button className="btn-secondary" onClick={() => openForm(item)} style={{ padding: '6px 12px' }}>
@@ -138,7 +151,7 @@ export default function InventoryPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg)' }}>
-                    {['Nombre', 'Unidad', 'Cantidad', isAuthenticated ? 'Acciones' : ''].filter(Boolean).map(h => (
+                    {['Nombre', 'Unidad', 'Cantidad', 'Costo u.', isAuthenticated ? 'Acciones' : ''].filter(Boolean).map(h => (
                       <th key={h} style={{
                         textAlign: 'left', padding: '12px 20px',
                         fontSize: 12, fontWeight: 700,
@@ -168,6 +181,9 @@ export default function InventoryPage() {
                         }}>
                           {item.quantity} {item.unit}
                         </span>
+                      </td>
+                      <td style={{ padding: '14px 20px', color: 'var(--text-muted)' }}>
+                        {item.cost_per_unit != null ? `$${item.cost_per_unit.toFixed(2)}` : '—'}
                       </td>
                       {isAuthenticated && (
                         <td style={{ padding: '14px 20px' }}>
@@ -219,6 +235,11 @@ export default function InventoryPage() {
                   <input className="input" type="number" min="0" step="0.01" placeholder="0"
                     value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} />
                 </div>
+              </div>
+              <div>
+                <label className="label">Costo por unidad (opcional)</label>
+                <input className="input" type="number" min="0" step="0.01" placeholder="Ej: 1.00"
+                  value={form.cost_per_unit} onChange={e => setForm({ ...form, cost_per_unit: e.target.value })} />
               </div>
             </div>
 
