@@ -2,18 +2,25 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
-import { ClipboardList, CheckCircle, Clock, Trash2, Pencil, Printer, X, Plus } from 'lucide-react'
+import { ClipboardList, CheckCircle, Clock, Trash2, Pencil, Download, X, Plus, ShoppingBag } from 'lucide-react'
 import type { Order, OrderItem, Product } from '@/lib/types'
+import NewOrderModal from './NewOrderModal'
+import html2pdf from 'html2pdf.js'
 
 export default function OrdersPage() {
   const { isAuthenticated } = useAuth()
   const [orders, setOrders] = useState<Order[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
+  const [showOrder, setShowOrder] = useState(false)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [editingName, setEditingName] = useState<{ orderId: number; name: string } | null>(null)
   const [editLines, setEditLines] = useState<{ product_id: number; quantity: number; unit_price: number }[]>([])
   const [saving, setSaving] = useState(false)
   const [viewInvoice, setViewInvoice] = useState<Order | null>(null)
+  const [showCombine, setShowCombine] = useState(false)
+  const [selectedForCombine, setSelectedForCombine] = useState<number[]>([])
+  const [combineName, setCombineName] = useState('')
 
   const fmt = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n)
   const fmtDate = (d: string) => new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -21,7 +28,7 @@ export default function OrdersPage() {
 
   const fetchAll = async () => {
     const [{ data: ords }, { data: prods }] = await Promise.all([
-      supabase.from('orders').select('*, items:order_items(*, product:products(*))').order('created_at', { ascending: false }),
+      supabase.from('orders').select('*, items:order_items(*, product:products(*)), combined_orders:orders!parent_order_id(*, items:order_items(*, product:products(*)))').order('created_at', { ascending: false }),
       supabase.from('products').select('*').order('name'),
     ])
     setOrders(ords || [])
@@ -33,7 +40,56 @@ export default function OrdersPage() {
 
   const handlePay = async (order: Order) => {
     if (!confirm('¿Marcar este pedido como pagado?')) return
-    await supabase.from('orders').update({ paid: true, paid_at: new Date().toISOString() }).eq('id', order.id)
+    
+    const now = new Date().toISOString()
+    
+    // Marcar la orden principal como pagada
+    await supabase.from('orders').update({ paid: true, paid_at: now }).eq('id', order.id)
+    
+    // Si es una factura combinada (parent_order_id es null y tiene combined_orders), marcar todos los pedidos asociados
+    if (!order.parent_order_id && order.combined_orders && order.combined_orders.length > 0) {
+      const combinedIds = order.combined_orders.map(o => o.id)
+      await supabase.from('orders').update({ paid: true, paid_at: now }).in('id', combinedIds)
+    }
+    
+    fetchAll()
+  }
+
+  const handleCombineOrders = async () => {
+    if (selectedForCombine.length < 2 || !combineName.trim()) return
+    
+    const selectedOrders = orders.filter(o => selectedForCombine.includes(o.id))
+    const totalCombined = selectedOrders.reduce((sum, o) => sum + o.total, 0)
+    
+    // Crear la factura combinada
+    const { data: combinedOrder } = await supabase
+      .from('orders')
+      .insert({ 
+        name: combineName,
+        total: totalCombined, 
+        paid: false
+      })
+      .select()
+      .single()
+    
+    if (combinedOrder) {
+      // Actualizar los pedidos seleccionados para que tengan este parent_order_id
+      await supabase
+        .from('orders')
+        .update({ parent_order_id: combinedOrder.id })
+        .in('id', selectedForCombine)
+    }
+    
+    setShowCombine(false)
+    setSelectedForCombine([])
+    setCombineName('')
+    fetchAll()
+  }
+
+  const handleSaveName = async (orderId: number, newName: string) => {
+    if (!newName.trim()) return
+    await supabase.from('orders').update({ name: newName }).eq('id', orderId)
+    setEditingName(null)
     fetchAll()
   }
 
@@ -70,6 +126,31 @@ export default function OrdersPage() {
     fetchAll()
   }
 
+  const downloadPDF = async (order: Order) => {
+    const element = document.getElementById('print-invoice')
+    if (!element) return
+
+    const fileName = order.name ? `${order.name}_${order.id}.pdf` : `Factura_${order.id}_${new Date().toISOString().split('T')[0]}.pdf`
+
+    // Clonar el elemento y remover los botones
+    const clonedElement = element.cloneNode(true) as HTMLElement
+    const buttonContainer = clonedElement.querySelector('#invoice-buttons')
+    if (buttonContainer) {
+      buttonContainer.remove()
+    }
+
+    const options = {
+      margin: 8,
+      filename: fileName,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: true },
+      jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' },
+      pageBreak: { mode: ['avoid-all', 'css', 'legacy'] },
+    }
+
+    html2pdf().set(options).from(clonedElement).save()
+  }
+
   const getProduct = (id: number) => products.find(p => p.id === id)
 
   if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-muted)' }}>Cargando...</div>
@@ -79,23 +160,65 @@ export default function OrdersPage() {
       <div className="mb-7">
         <h1 className="text-2xl sm:text-3xl font-bold" style={{ fontSize: 26, fontWeight: 800, margin: 0 }}>Historial de Pedidos</h1>
         <p style={{ color: 'var(--text-muted)', marginTop: 4, fontSize: 14 }}>
-          {orders.length} pedidos en total · {orders.filter(o => !o.paid).length} pendientes de pago
+          {orders.filter(o => !o.parent_order_id).length} pedidos en total · {orders.filter(o => !o.paid && !o.parent_order_id).length} pendientes de pago
         </p>
       </div>
+
+      {isAuthenticated && (
+        <div style={{ marginBottom: 20, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn-secondary" onClick={() => setShowOrder(true)}>
+            <ShoppingBag size={15} /> Nuevo pedido
+          </button>
+          {orders.filter(o => !o.paid && !o.parent_order_id).length > 1 && (
+            <button className="btn-secondary" onClick={() => setShowCombine(true)}>
+              <Plus size={15} /> Combinar pedidos
+            </button>
+          )}
+        </div>
+      )}
 
       {orders.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60 }}>
           <ClipboardList size={40} style={{ color: 'var(--text-muted)', margin: '0 auto 12px' }} />
-          <p style={{ color: 'var(--text-muted)' }}>No hay pedidos aún. Crea uno desde la sección de Productos.</p>
+          <p style={{ color: 'var(--text-muted)' }}>No hay pedidos aún. Crea uno desde aquí o desde la sección de Productos.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          {orders.map(order => (
+          {orders.filter(o => !o.parent_order_id).map(order => (
             <div key={order.id} className="card">
               <div className="flex flex-col lg:flex-row lg:justify-between lg:items-start gap-4">
                 <div className="flex-1">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-2">
-                    <span className="font-semibold text-base">Pedido #{order.id}</span>
+                    {editingName?.orderId === order.id ? (
+                      <div className="flex gap-2" style={{ flex: 1 }}>
+                        <input 
+                          className="input" 
+                          value={editingName.name}
+                          onChange={e => setEditingName({ ...editingName, name: e.target.value })}
+                          style={{ flex: 1 }}
+                        />
+                        <button 
+                          className="btn-primary" 
+                          onClick={() => handleSaveName(order.id, editingName.name)}
+                          style={{ padding: '8px 14px', fontSize: 13 }}
+                        >
+                          Guardar
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="font-semibold text-base">{order.name || `Pedido #${order.id}`}</span>
+                        {isAuthenticated && (
+                          <button 
+                            className="btn-ghost"
+                            onClick={() => setEditingName({ orderId: order.id, name: order.name || '' })}
+                            style={{ padding: '4px 8px', fontSize: 12 }}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        )}
+                      </>
+                    )}
                     {order.paid
                       ? <span className="badge-paid">✓ Pagado</span>
                       : <span className="badge-unpaid">⏳ Pendiente</span>
@@ -130,7 +253,7 @@ export default function OrdersPage() {
               {/* Actions */}
               <div className="flex flex-wrap gap-2 mt-4">
                 <button className="btn-secondary" onClick={() => setViewInvoice(order)} style={{ fontSize: 13, padding: '7px 14px' }}>
-                  <Printer size={13} /> Ver factura
+                  <Download size={13} /> Ver factura
                 </button>
                 {isAuthenticated && !order.paid && (
                   <button className="btn-primary" onClick={() => handlePay(order)} style={{ fontSize: 13, padding: '7px 14px' }}>
@@ -159,7 +282,8 @@ export default function OrdersPage() {
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20,
         }}>
-          <div className="card" style={{ width: '100%', maxWidth: 460 }} id="print-invoice">
+          <div style={{ width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto' }}>
+            <div className="card" style={{ width: '100%' }} id="print-invoice">
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
               <div style={{
                 width: 48, height: 48, background: 'var(--accent)', borderRadius: 12,
@@ -167,24 +291,56 @@ export default function OrdersPage() {
                 margin: '0 auto 10px', color: 'white', fontWeight: 900, fontSize: 20,
               }}>D</div>
               <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Doña Popeta</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 2px' }}>Pedido #{viewInvoice.id}</p>
+              <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 2px' }}>
+                {viewInvoice.combined_orders && viewInvoice.combined_orders.length > 0 ? 'Factura Combinada' : `Pedido #${viewInvoice.id}`}
+              </p>
+              {viewInvoice.name && (
+                <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '2px 0' }}>{viewInvoice.name}</p>
+              )}
               <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
                 {new Date(viewInvoice.created_at).toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' })}
               </p>
             </div>
 
-            <div style={{ borderTop: '1.5px solid var(--border)', borderBottom: '1.5px solid var(--border)', padding: '14px 0', marginBottom: 14 }}>
-              {(viewInvoice.items || []).map((item: OrderItem) => (
-                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 14 }}>
-                  <span>
-                    <strong>{item.product?.name}</strong>
-                    <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>x{item.quantity}</span>
-                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>{fmt(item.unit_price)} c/u</span>
-                  </span>
-                  <span style={{ fontWeight: 600 }}>{fmt(item.unit_price * item.quantity)}</span>
-                </div>
-              ))}
-            </div>
+            {viewInvoice.combined_orders && viewInvoice.combined_orders.length > 0 ? (
+              // Mostrar factura combinada con todos los pedidos
+              <div style={{ borderTop: '1.5px solid var(--border)', borderBottom: '1.5px solid var(--border)', padding: '14px 0', marginBottom: 14 }}>
+                {viewInvoice.combined_orders.map((combinedOrder: Order) => (
+                  <div key={combinedOrder.id} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', marginBottom: 6 }}>
+                      Pedido {combinedOrder.name ? `"${combinedOrder.name}"` : `#${combinedOrder.id}`}
+                    </div>
+                    {(combinedOrder.items || []).map((item: OrderItem) => (
+                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 13 }}>
+                        <span>
+                          <span>{item.product?.name}</span>
+                          <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>x{item.quantity}</span>
+                        </span>
+                        <span style={{ fontWeight: 600 }}>{fmt(item.unit_price * item.quantity)}</span>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4, paddingTop: 4, borderTop: '1px dashed var(--border)', color: 'var(--text-muted)' }}>
+                      <span>Subtotal:</span>
+                      <span>{fmt(combinedOrder.total)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              // Mostrar pedido simple
+              <div style={{ borderTop: '1.5px solid var(--border)', borderBottom: '1.5px solid var(--border)', padding: '14px 0', marginBottom: 14 }}>
+                {(viewInvoice.items || []).map((item: OrderItem) => (
+                  <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 14 }}>
+                    <span>
+                      <strong>{item.product?.name}</strong>
+                      <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>x{item.quantity}</span>
+                      <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>{fmt(item.unit_price)} c/u</span>
+                    </span>
+                    <span style={{ fontWeight: 600 }}>{fmt(item.unit_price * item.quantity)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 17, marginBottom: 16 }}>
               <span>Total</span>
@@ -203,13 +359,14 @@ export default function OrdersPage() {
               }
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 justify-end">
-              <button className="btn-secondary" onClick={() => window.print()}>
-                <Printer size={14} /> Imprimir
+            <div id="invoice-buttons" className="flex flex-col sm:flex-row gap-3 justify-end">
+              <button className="btn-secondary" onClick={() => downloadPDF(viewInvoice)}>
+                <Download size={14} /> Descargar PDF
               </button>
               <button className="btn-primary" onClick={() => setViewInvoice(null)}>
                 Cerrar
               </button>
+            </div>
             </div>
           </div>
         </div>
@@ -275,6 +432,91 @@ export default function OrdersPage() {
               <button className="btn-secondary" onClick={() => setEditingOrder(null)}>Cancelar</button>
               <button className="btn-primary" onClick={handleSaveEdit} disabled={saving}>
                 {saving ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Order Modal */}
+      {showOrder && (
+        <NewOrderModal 
+          products={products} 
+          onClose={() => setShowOrder(false)} 
+          onCreated={() => fetchAll()} 
+        />
+      )}
+
+      {/* Combine Orders Modal */}
+      {showCombine && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20,
+        }}>
+          <div className="card" style={{ width: '100%', maxWidth: 500, maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Combinar pedidos</h2>
+              <button onClick={() => setShowCombine(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <label className="label">Nombre de la factura (opcional)</label>
+              <input 
+                className="input" 
+                placeholder="Ej: Factura de Marzo" 
+                value={combineName}
+                onChange={e => setCombineName(e.target.value)} 
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="label">Selecciona los pedidos a combinar</label>
+              <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+                {orders.filter(o => !o.paid && !o.parent_order_id).map(order => (
+                  <div key={order.id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
+                    <input 
+                      type="checkbox" 
+                      id={`order-${order.id}`}
+                      checked={selectedForCombine.includes(order.id)}
+                      onChange={e => {
+                        if (e.target.checked) {
+                          setSelectedForCombine([...selectedForCombine, order.id])
+                        } else {
+                          setSelectedForCombine(selectedForCombine.filter(id => id !== order.id))
+                        }
+                      }}
+                      style={{ width: 18, height: 18, cursor: 'pointer' }}
+                    />
+                    <label htmlFor={`order-${order.id}`} style={{ flex: 1, cursor: 'pointer', fontSize: 14 }}>
+                      <div style={{ fontWeight: 600 }}>{order.name || `Pedido #${order.id}`}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmt(order.total)}</div>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {selectedForCombine.length > 0 && (
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 15 }}>
+                  <span>Total combinado</span>
+                  <span style={{ color: 'var(--accent)' }}>
+                    {fmt(orders.filter(o => selectedForCombine.includes(o.id)).reduce((sum, o) => sum + o.total, 0))}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-end">
+              <button className="btn-secondary" onClick={() => setShowCombine(false)}>Cancelar</button>
+              <button 
+                className="btn-primary" 
+                onClick={handleCombineOrders} 
+                disabled={selectedForCombine.length < 2 || saving}
+              >
+                {saving ? 'Combinando...' : `Combinar ${selectedForCombine.length} pedidos`}
               </button>
             </div>
           </div>

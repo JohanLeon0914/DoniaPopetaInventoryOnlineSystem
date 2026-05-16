@@ -16,6 +16,7 @@ interface OrderLine {
 }
 
 export default function NewOrderModal({ products, onClose, onCreated }: Props) {
+  const [name, setName] = useState('')
   const [lines, setLines] = useState<OrderLine[]>([{ product_id: products[0]?.id || 0, quantity: 1 }])
   const [saving, setSaving] = useState(false)
   const [created, setCreated] = useState(false)
@@ -39,7 +40,7 @@ export default function NewOrderModal({ products, onClose, onCreated }: Props) {
 
     const { data: order } = await supabase
       .from('orders')
-      .insert({ total, paid: false })
+      .insert({ name: name || `Pedido ${new Date().toLocaleDateString()}`, total, paid: false })
       .select()
       .single()
 
@@ -147,6 +148,16 @@ export default function NewOrderModal({ products, onClose, onCreated }: Props) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
             <X size={18} />
           </button>
+        </div>
+
+        <div className="mb-4">
+          <label className="label">Nombre del pedido (opcional)</label>
+          <input 
+            className="input" 
+            placeholder="Ej: Pedido de María" 
+            value={name}
+            onChange={e => setName(e.target.value)} 
+          />
         </div>
 
         {lines.map((line, idx) => (

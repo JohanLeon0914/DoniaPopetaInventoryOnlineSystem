@@ -25,11 +25,14 @@ export interface ProductIngredient {
 
 export interface Order {
   id: number
+  name?: string
   created_at: string
   paid: boolean
   paid_at: string | null
   total: number
+  parent_order_id?: number | null
   items?: OrderItem[]
+  combined_orders?: Order[]
 }
 
 export interface OrderItem {
