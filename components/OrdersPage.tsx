@@ -141,10 +141,10 @@ export default function OrdersPage() {
     const options = {
       margin: 8,
       filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
+      image: { type: 'jpeg' as const, quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true, allowTaint: true },
-      jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' },
-      pageBreak: { mode: ['avoid-all', 'css', 'legacy'] },
+      jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' as const },
+      pageBreak: { mode: ['avoid-all', 'css', 'legacy'] as const },
     }
 
     html2pdf().set(options).from(clonedElement).save()
