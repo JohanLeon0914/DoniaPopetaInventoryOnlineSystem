@@ -5,7 +5,6 @@ import { useAuth } from '@/lib/auth-context'
 import { ClipboardList, CheckCircle, Clock, Trash2, Pencil, Download, X, Plus, ShoppingBag } from 'lucide-react'
 import type { Order, OrderItem, Product } from '@/lib/types'
 import NewOrderModal from './NewOrderModal'
-import html2pdf from 'html2pdf.js'
 
 export default function OrdersPage() {
   const { isAuthenticated } = useAuth()
@@ -132,13 +131,13 @@ export default function OrdersPage() {
 
     const fileName = order.name ? `${order.name}_${order.id}.pdf` : `Factura_${order.id}_${new Date().toISOString().split('T')[0]}.pdf`
 
-    // Clonar el elemento y remover los botones
     const clonedElement = element.cloneNode(true) as HTMLElement
     const buttonContainer = clonedElement.querySelector('#invoice-buttons')
     if (buttonContainer) {
       buttonContainer.remove()
     }
 
+    const html2pdf = (await import('html2pdf.js')).default
     const options = {
       margin: 8,
       filename: fileName,
