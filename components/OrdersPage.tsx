@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
-import { ClipboardList, CheckCircle, Clock, Trash2, Pencil, Download, X, Plus, ShoppingBag } from 'lucide-react'
+import { ClipboardList, CheckCircle, Trash2, Pencil, Download, X, Plus, ShoppingBag, Sparkles } from 'lucide-react'
 import type { Order, OrderItem, Product } from '@/lib/types'
 import NewOrderModal from './NewOrderModal'
 
@@ -20,6 +20,9 @@ export default function OrdersPage() {
   const [showCombine, setShowCombine] = useState(false)
   const [selectedForCombine, setSelectedForCombine] = useState<number[]>([])
   const [combineName, setCombineName] = useState('')
+  const [aiText, setAiText] = useState('')
+  const [aiSaving, setAiSaving] = useState(false)
+  const [aiError, setAiError] = useState('')
 
   const fmt = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n)
   const fmtDate = (d: string) => new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -83,6 +86,84 @@ export default function OrdersPage() {
     setSelectedForCombine([])
     setCombineName('')
     fetchAll()
+  }
+
+  const handleCreateAiOrder = async () => {
+    if (!aiText.trim()) return
+
+    setAiSaving(true)
+    setAiError('')
+
+    try {
+      const response = await fetch('/api/orders/parse-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: aiText }),
+      })
+      const payload = await response.json()
+
+      if (!response.ok || !payload.order) {
+        throw new Error(payload.error || 'No se pudo interpretar el pedido.')
+      }
+
+      const parsedOrder = payload.order as {
+        order_name: string
+        lines: { product_id: number; quantity: number }[]
+      }
+
+      const validLines = parsedOrder.lines
+        .map(line => {
+          const product = products.find(p => p.id === line.product_id)
+          if (!product) return null
+
+          return {
+            product_id: product.id,
+            quantity: line.quantity,
+            unit_price: product.sale_price,
+          }
+        })
+        .filter((line): line is { product_id: number; quantity: number; unit_price: number } => Boolean(line))
+
+      if (validLines.length === 0) {
+        throw new Error('La IA no encontró productos válidos en la base de datos.')
+      }
+
+      const total = validLines.reduce((acc, line) => acc + line.quantity * line.unit_price, 0)
+      const { data: order, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          name: parsedOrder.order_name,
+          total,
+          paid: false,
+        })
+        .select()
+        .single()
+
+      if (orderError || !order) {
+        throw new Error('No se pudo crear el pedido.')
+      }
+
+      const { error: itemsError } = await supabase.from('order_items').insert(
+        validLines.map(line => ({
+          order_id: order.id,
+          product_id: line.product_id,
+          quantity: line.quantity,
+          unit_price: line.unit_price,
+        }))
+      )
+
+      if (itemsError) {
+        await supabase.from('orders').delete().eq('id', order.id)
+        throw new Error('No se pudieron guardar los productos del pedido.')
+      }
+
+      setAiText('')
+      await fetchAll()
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : 'No se pudo crear el pedido con IA.')
+    } finally {
+      setAiSaving(false)
+    }
   }
 
   const handleSaveName = async (orderId: number, newName: string) => {
@@ -164,16 +245,45 @@ export default function OrdersPage() {
       </div>
 
       {isAuthenticated && (
-        <div style={{ marginBottom: 20, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn-secondary" onClick={() => setShowOrder(true)}>
-            <ShoppingBag size={15} /> Nuevo pedido
-          </button>
-          {orders.filter(o => !o.paid && !o.parent_order_id).length > 1 && (
-            <button className="btn-secondary" onClick={() => setShowCombine(true)}>
-              <Plus size={15} /> Combinar pedidos
+        <>
+          <div style={{ marginBottom: 20, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn-secondary" onClick={() => setShowOrder(true)}>
+              <ShoppingBag size={15} /> Nuevo pedido
             </button>
-          )}
-        </div>
+            {orders.filter(o => !o.paid && !o.parent_order_id).length > 1 && (
+              <button className="btn-secondary" onClick={() => setShowCombine(true)}>
+                <Plus size={15} /> Combinar pedidos
+              </button>
+            )}
+          </div>
+
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="flex flex-col lg:flex-row gap-4 lg:items-end">
+              <div style={{ flex: 1 }}>
+                <label className="label">Crear pedido con ChatGPT</label>
+                <textarea
+                  className="input"
+                  rows={6}
+                  placeholder={'Pedido Viernes 18 de Septiembre\n\n200 Queso\n160 Limón\n160 Tradicionales'}
+                  value={aiText}
+                  onChange={event => setAiText(event.target.value)}
+                  style={{ resize: 'vertical', minHeight: 132 }}
+                />
+                {aiError && (
+                  <p style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0 0' }}>{aiError}</p>
+                )}
+              </div>
+              <button
+                className="btn-primary"
+                onClick={handleCreateAiOrder}
+                disabled={aiSaving || !aiText.trim() || products.length === 0}
+                style={{ justifyContent: 'center', minWidth: 180 }}
+              >
+                <Sparkles size={15} /> {aiSaving ? 'Creando...' : 'Crear con IA'}
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {orders.length === 0 ? (
