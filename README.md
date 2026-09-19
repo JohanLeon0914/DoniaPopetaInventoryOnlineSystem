@@ -26,6 +26,7 @@ GEMINI_MODEL=gemini-2.5-flash
 ```
 
 In Vercel, set `GEMINI_API_KEY` visibility to **Secret**. Never prefix it with `NEXT_PUBLIC_`.
+Redeploy the project after changing either Gemini environment variable.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
