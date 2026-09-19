@@ -18,18 +18,14 @@ interface ParsedOrder {
   lines: ParsedOrderLine[]
 }
 
-interface OpenAIOutputContent {
-  type?: string
-  text?: string
-}
-
-interface OpenAIOutputItem {
-  content?: OpenAIOutputContent[]
-}
-
-interface OpenAIResponsePayload {
-  output_text?: string
-  output?: OpenAIOutputItem[]
+interface GeminiResponsePayload {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string
+      }>
+    }
+  }>
   error?: {
     message?: string
   }
@@ -100,13 +96,13 @@ function coerceParsedOrder(raw: unknown, products: ProductOption[]): ParsedOrder
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = process.env.GEMINI_API_KEY
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'Falta configurar OPENAI_API_KEY en el servidor.' },
+      { error: 'Falta configurar GEMINI_API_KEY en el servidor.' },
       { status: 500 },
     )
   }
@@ -148,73 +144,69 @@ export async function POST(request: Request) {
     sale_price: product.sale_price,
   }))
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-5',
-      input: [
-        {
-          role: 'system',
-          content: [
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
             {
-              type: 'input_text',
               text: [
-                'Eres un asistente que convierte pedidos de Doña Popeta a JSON.',
-                'Usa exclusivamente productos del catálogo recibido; nunca inventes product_id.',
-                'El texto suele venir como encabezado y luego líneas con cantidad y sabor/producto.',
-                'Si el encabezado empieza con "Pedido" y no dice de quién es, agrega "Nelson" justo después de "Pedido".',
+                'Eres un asistente que convierte pedidos de Do\u00f1a Popeta a JSON.',
+                'Usa exclusivamente productos del cat\u00e1logo recibido; nunca inventes product_id.',
+                'El texto suele venir como encabezado y luego l\u00edneas con cantidad y sabor/producto.',
+                'Si el encabezado empieza con "Pedido" y no dice de qui\u00e9n es, agrega "Nelson" justo despu\u00e9s de "Pedido".',
                 'Si el pedido es de Nelson o Colegios, prioriza productos cuyo nombre contenga "colegio".',
                 'Si el pedido menciona SENA, prioriza productos cuyo nombre contenga "sena".',
-                'Relaciona sabores por nombre aunque tengan singular, plural, mayúsculas o tildes diferentes.',
-                'El nombre del pedido debe conservar la fecha o descripción del encabezado.',
+                'Relaciona sabores por nombre aunque tengan singular, plural, may\u00fasculas o tildes diferentes.',
+                'El nombre del pedido debe conservar la fecha o descripci\u00f3n del encabezado.',
               ].join(' '),
             },
           ],
         },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: JSON.stringify({
-                pedido: rawText,
-                productos_disponibles: catalog,
-              }),
-            },
-          ],
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: JSON.stringify({
+                  pedido: rawText,
+                  productos_disponibles: catalog,
+                }),
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseJsonSchema: orderSchema,
         },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'parsed_order',
-          strict: true,
-          schema: orderSchema,
-        },
-      },
-    }),
-  })
+      }),
+    },
+  )
 
-  const payload = await response.json().catch(() => null) as OpenAIResponsePayload | null
+  const payload = await response.json().catch(() => null) as GeminiResponsePayload | null
 
   if (!response.ok) {
     return NextResponse.json(
-      { error: payload?.error?.message || 'OpenAI no pudo interpretar el pedido.' },
+      { error: payload?.error?.message || 'Gemini no pudo interpretar el pedido.' },
       { status: 502 },
     )
   }
 
-  const outputText = typeof payload?.output_text === 'string'
-    ? payload.output_text
-    : payload?.output?.flatMap(item => item.content || [])
-      .find(content => content.type === 'output_text')?.text
+  const outputText = payload?.candidates?.[0]?.content?.parts
+    ?.map(part => part.text || '')
+    .join('')
+    .trim()
 
   if (!outputText) {
-    return NextResponse.json({ error: 'OpenAI no devolvió un JSON válido.' }, { status: 502 })
+    return NextResponse.json({ error: 'Gemini no devolvió un JSON válido.' }, { status: 502 })
   }
 
   let parsedJson: unknown
@@ -222,7 +214,7 @@ export async function POST(request: Request) {
   try {
     parsedJson = JSON.parse(outputText)
   } catch {
-    return NextResponse.json({ error: 'OpenAI devolvió una respuesta que no se pudo leer como JSON.' }, { status: 502 })
+    return NextResponse.json({ error: 'Gemini devolvió una respuesta que no se pudo leer como JSON.' }, { status: 502 })
   }
 
   const parsedOrder = coerceParsedOrder(parsedJson, productOptions)
